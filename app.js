@@ -22,7 +22,7 @@ let STATE = {
 };
 
 function loadState() {
-  STATE.plan      = LS.get('plan') || (window.DEFAULT_PLAN ?? null);
+  STATE.plan      = LS.get('plan') || window.DEFAULT_PLAN || null;
   STATE.startDate = LS.get('startDate');
   STATE.logs      = LS.get('logs', {});
   STATE.runs      = LS.get('runs', []);
@@ -198,7 +198,7 @@ function renderDashboard() {
   document.getElementById('greeting-sub').textContent  = greet()+'!';
   document.getElementById('greeting-main').textContent = `Ciao${name} 👋`;
   const todayStr=today(), wo=getWorkoutForDate(todayStr), log=STATE.logs[todayStr];
-  if (!STATE.plan||!STATE.startDate) {
+  if (!STATE.plan && !window.DEFAULT_PLAN) {
     document.getElementById('today-workout-name').textContent='Carica la tua scheda';
     document.getElementById('today-workout-meta').textContent='Vai in Impostazioni per iniziare.';
     document.getElementById('today-cta').textContent='⚙️ Impostazioni';
@@ -215,7 +215,7 @@ function renderDashboard() {
     document.getElementById('today-cta').textContent=log?.completed?'📊 Vedi progressi':'▶ Inizia';
     document.getElementById('today-cta').onclick=()=>navigate(log?.completed?'progress':'workout');
   }
-  document.getElementById('streak-count').textContent=calcStreak();
+  try { document.getElementById('streak-count').textContent=calcStreak(); } catch(e){ document.getElementById('streak-count').textContent='0'; }
   renderWeekStrip();
   const allLogs=Object.values(STATE.logs);
   const totalKm=STATE.runs.reduce((a,r)=>a+(r.km||0),0);
@@ -226,7 +226,8 @@ function renderDashboard() {
   document.getElementById('stat-prot').textContent=avgProt||'—';
   const lastDiff=allLogs.filter(l=>l.difficulty).slice(-1)[0]?.difficulty;
   document.getElementById('stat-rate').textContent=lastDiff?diffLabel(lastDiff).split(' ')[0]:'—';
-  if (STATE.plan?.note) document.getElementById('motivational-quote').textContent=STATE.plan.note;
+  const planNote = STATE.plan?.note ?? window.DEFAULT_PLAN?.note;
+  if (planNote) document.getElementById('motivational-quote').textContent = planNote;
 }
 
 function renderWeekStrip() {
@@ -245,12 +246,17 @@ function renderWeekStrip() {
 }
 
 function calcStreak() {
-  let streak=0; const d=new Date();
-  while(true) {
-    const iso=toISO(d), wo=getWorkoutForDate(iso), log=STATE.logs[iso];
-    if (!wo||wo.type==='rest') { d.setDate(d.getDate()-1); if(streak===0) continue; else break; }
-    if (log?.completed) { streak++; d.setDate(d.getDate()-1); }
-    else if (iso===today()) { d.setDate(d.getDate()-1); continue; }
+  if (!STATE.plan || !STATE.startDate) return 0;
+  let streak = 0, safetyLimit = 0;
+  const d = new Date();
+  while (safetyLimit++ < 365) {
+    const iso = toISO(d), wo = getWorkoutForDate(iso), log = STATE.logs[iso];
+    if (!wo || wo.type === 'rest') {
+      d.setDate(d.getDate() - 1);
+      if (streak === 0) continue; else break;
+    }
+    if (log?.completed) { streak++; d.setDate(d.getDate() - 1); }
+    else if (iso === today()) { d.setDate(d.getDate() - 1); continue; }
     else break;
   }
   return streak;
@@ -690,6 +696,7 @@ function renderProgressPage() {
 }
 
 function calcBestStreak(){
+  if (!STATE.plan || !STATE.startDate) return 0;
   let best=0,cur=0;
   for(const d of Object.keys(STATE.logs).sort()){const log=STATE.logs[d],wo=getWorkoutForDate(d);if(!wo||wo.type==='rest'){best=Math.max(best,cur);cur=0;continue;}if(log?.completed)cur++;else{best=Math.max(best,cur);cur=0;}}
   return Math.max(best,cur);
