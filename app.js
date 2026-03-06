@@ -730,17 +730,32 @@ function savePrefs() {
 function clearAllData(){if(!confirm('Cancellare tutti i dati?'))return;localStorage.clear();location.reload();}
 
 // ══════════════════════════════════════
-//  BOOT
+//  BOOT — Versione Corretta
 // ══════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // 1. Carica lo stato dai dati salvati (localStorage)
   loadState();
-  setSyncStatus(getSheetsUrl()?'syncing':'idle');
-  renderDashboard();
-  document.getElementById('run-date').value=today();
 
+  // 2. EMERGENZA: Se il piano non è nel localStorage, caricalo da plan.js
+  if (!STATE.plan && window.DEFAULT_PLAN) {
+    STATE.plan = window.DEFAULT_PLAN;
+    saveStateLocal(); // Salvalo così al prossimo avvio è già pronto
+  }
+
+  // 3. Renderizza la Dashboard IMMEDIATAMENTE
+  // Questo toglie la scritta "Caricamento..."
+  if (typeof renderDashboard === 'function') {
+    renderDashboard();
+  }
+
+  // 4. Sincronizzazione Google Sheets (opzionale e asincrona)
   if (getSheetsUrl()) {
-    const synced=await loadFromSheets();
-    if (synced) renderDashboard();
+    try {
+      const synced = await loadFromSheets();
+      if (synced) renderDashboard(); 
+    } catch (e) {
+      console.warn("Sheet non connesso, uso dati locali.");
+    }
   }
 });
