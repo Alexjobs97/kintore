@@ -319,7 +319,7 @@ function renderWeekStrip() {
     cell.innerHTML = '<div class="wdc-day">' + labels[d.getDay()] + '</div>' +
                      '<div class="wdc-icon">' + (wo?.emoji ?? '—') + '</div>' +
                      '<div class="wdc-status">' + status + '</div>';
-    cell.onclick = () => navigate('workout');
+    cell.onclick = () => navigateToWorkoutDate(iso);
     strip.appendChild(cell);
   }
 }
@@ -419,7 +419,7 @@ function _renderCalMonth(year, month) {
     cell.innerHTML = '<div class="cal-day-num">' + day + '</div>' +
                      (wo ? '<div class="cal-day-icon">' + wo.emoji + '</div>' : '') + mood;
     cell.title = wo?.label ?? (isFuture ? '—' : '');
-    if (wo) cell.onclick = () => navigate('workout');
+    if (wo) cell.onclick = () => navigateToWorkoutDate(iso);
     grid.appendChild(cell);
   }
 }
@@ -491,17 +491,31 @@ function downloadICS() {
 //  WORKOUT PAGE
 // ══════════════════════════════════════
 let CURRENT_SESSION = null;
+let WORKOUT_DATE = null;      // null = today, otherwise "YYYY-MM-DD"
+let WORKOUT_OVERRIDE = null;  // manual session override (e.g. do session A on a cardio day)
 
 function renderWorkoutPage() {
-  const todayStr = today();
-  const wo  = getWorkoutForDate(todayStr);
-  const log = STATE.logs[todayStr];
+  const dateStr = WORKOUT_DATE ?? today();
+  const isToday = dateStr === today();
+  const wo      = WORKOUT_OVERRIDE ?? getWorkoutForDate(dateStr);
+  const log     = STATE.logs[dateStr];
+
+  // Update title to reflect selected date
+  const dateLabel = isToday ? 'di oggi' : formatDateLabel(dateStr);
+  document.getElementById('workout-page-title').textContent = 'Allenamento ' + dateLabel;
+
+  // Init date picker with selected date
+  const dpInput = document.getElementById('workout-date-select');
+  if (dpInput && !dpInput.value) dpInput.value = dateStr;
 
   // Reset visibility
   document.getElementById('workout-detail-container').classList.remove('hidden');
   document.getElementById('no-workout-today').classList.add('hidden');
   document.getElementById('cardio-detail-block').classList.add('hidden');
   ['btn-start-companion','btn-mark-run','btn-mark-rest'].forEach(id => document.getElementById(id).classList.add('hidden'));
+
+  // Populate session picker whenever picker is open
+  populateSessionPicker(dateStr);
 
   if (!STATE.plan || !STATE.startDate) {
     document.getElementById('wi-name').textContent = 'Imposta la data di inizio';
@@ -515,8 +529,6 @@ function renderWorkoutPage() {
     document.getElementById('no-workout-today').classList.remove('hidden');
     return;
   }
-
-  document.getElementById('workout-page-title').textContent = wo.emoji + ' ' + wo.label;
 
   if (wo.type === 'rest' || wo.type === 'rest_active') {
     const badge = document.getElementById('wi-session-badge');
@@ -541,7 +553,7 @@ function renderWorkoutPage() {
     const badge = document.getElementById('wi-session-badge');
     badge.textContent = '🏃'; badge.style.background = 'var(--cardio)';
     document.getElementById('wi-name').textContent = 'Sessione di Corsa';
-    const week = getWeekNumber(todayStr);
+    const week = getWeekNumber(dateStr);
     const ci   = STATE.plan.cardioByWeek?.[week] ?? {};
     document.getElementById('wi-meta').innerHTML = '⏱ ' + (ci.durationMin ?? '?') + ' min &nbsp;·&nbsp; Settimana ' + week;
     document.getElementById('wi-focus').innerHTML = '';
@@ -586,9 +598,109 @@ function renderWorkoutPage() {
   });
 }
 
+// ── Flexible scheduling helpers ──────────────────────────
+
+function formatDateLabel(iso) {
+  const d = fromISO(iso), t = today();
+  if (iso === t) return 'di oggi';
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+  if (iso === toISO(yesterday)) return 'di ieri';
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1);
+  if (iso === toISO(tomorrow)) return 'di domani';
+  const days = ['dom','lun','mar','mer','gio','ven','sab'];
+  const months = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
+  return 'del ' + d.getDate() + ' ' + months[d.getMonth()];
+}
+
+function toggleWorkoutDatePicker() {
+  const picker = document.getElementById('workout-date-picker');
+  const isHidden = picker.classList.contains('hidden');
+  picker.classList.toggle('hidden', !isHidden);
+  if (isHidden) {
+    const dp = document.getElementById('workout-date-select');
+    dp.value = WORKOUT_DATE ?? today();
+    populateSessionPicker(dp.value);
+  }
+}
+
+function populateSessionPicker(dateStr) {
+  const el = document.getElementById('workout-session-picker');
+  if (!el || !STATE.plan) return;
+  el.innerHTML = '';
+  // Show all available sessions as quick-pick chips
+  const sessions = STATE.plan.sessions ?? {};
+  const currentOverride = WORKOUT_OVERRIDE;
+
+  // Add "Programmato" chip (what the plan says for that day)
+  const planned = getWorkoutForDate(dateStr);
+  if (planned) {
+    const chip = document.createElement('button');
+    const isActive = !currentOverride;
+    chip.className = 'session-chip' + (isActive ? ' active' : '');
+    chip.textContent = planned.emoji + ' ' + planned.label + ' (piano)';
+    chip.onclick = () => { WORKOUT_OVERRIDE = null; renderWorkoutPage(); updateChips(); };
+    el.appendChild(chip);
+  }
+
+  // Add chips for each strength session
+  Object.entries(sessions).forEach(([sid, sess]) => {
+    const chip = document.createElement('button');
+    const thisWo = { type:'strength', sessionId: sid, label: sess.name, emoji:'💪' };
+    const isActive = currentOverride?.sessionId === sid;
+    chip.className = 'session-chip' + (isActive ? ' active' : '');
+    chip.textContent = '💪 ' + sess.name;
+    chip.onclick = () => { WORKOUT_OVERRIDE = thisWo; renderWorkoutPage(); updateChips(); };
+    el.appendChild(chip);
+  });
+
+  // Corsa chip
+  const runChip = document.createElement('button');
+  const isRunActive = currentOverride?.type === 'cardio';
+  runChip.className = 'session-chip' + (isRunActive ? ' active' : '');
+  runChip.textContent = '🏃 Corsa';
+  runChip.onclick = () => {
+    WORKOUT_OVERRIDE = { type:'cardio', sessionId:'run', label:'Corsa', emoji:'🏃' };
+    renderWorkoutPage(); updateChips();
+  };
+  el.appendChild(runChip);
+}
+
+function updateChips() {
+  // Re-render chips to reflect new active state
+  const dp = document.getElementById('workout-date-select');
+  populateSessionPicker(dp?.value ?? (WORKOUT_DATE ?? today()));
+}
+
+function onWorkoutDateChange() {
+  WORKOUT_OVERRIDE = null; // reset session override when date changes
+}
+
+function applyWorkoutDate() {
+  const val = document.getElementById('workout-date-select').value;
+  if (!val) return;
+  WORKOUT_DATE = val;
+  document.getElementById('workout-date-picker').classList.add('hidden');
+  renderWorkoutPage();
+}
+
+function resetToToday() {
+  WORKOUT_DATE = null;
+  WORKOUT_OVERRIDE = null;
+  document.getElementById('workout-date-select').value = today();
+  document.getElementById('workout-date-picker').classList.add('hidden');
+  renderWorkoutPage();
+}
+
+// navigateToWorkoutDate — called from calendar day click
+function navigateToWorkoutDate(iso) {
+  WORKOUT_DATE = iso;
+  WORKOUT_OVERRIDE = null;
+  navigate('workout');
+}
+
 function openRunLog()  { navigate('run'); }
 function markRestDone() {
-  const d = today();
+  const d = WORKOUT_DATE ?? today();
   STATE.logs[d] = { type:'rest', completed:true, date:d };
   saveState(); showToast('✅ Riposo segnato!'); renderWorkoutPage();
 }
@@ -651,9 +763,12 @@ function showCompExercise() {
   }
 
   const rEl = document.getElementById('comp-reps-display');
-  if (ex.isTimer && ex.duration && !ex.sets) rEl.textContent = formatTime(ex.duration);
-  else if (ex.reps) rEl.textContent = ex.reps + ' rep' + (ex.sets ? ' · Serie '+(COMP.setIdx+1)+'/'+ex.sets : '');
-  else rEl.textContent = '';
+  const exDur = getExDuration(ex);
+  if (ex.isTimer && exDur) {
+    rEl.textContent = formatTime(exDur) + (ex.sets ? ' · Serie '+(COMP.setIdx+1)+'/'+ex.sets : '');
+  } else if (ex.reps) {
+    rEl.textContent = ex.reps + (ex.sets ? ' · Serie '+(COMP.setIdx+1)+'/'+ex.sets : '');
+  } else rEl.textContent = '';
 
   document.getElementById('comp-exercise-desc').textContent = ex.desc ?? '';
   const notesEl = document.getElementById('comp-notes-block');
@@ -661,8 +776,10 @@ function showCompExercise() {
   else notesEl.classList.add('hidden');
 
   const btn = document.getElementById('comp-main-btn');
-  if (ex.isTimer && ex.duration && !ex.sets) {
-    btn.textContent = '▶ INIZIA TIMER'; btn.onclick = () => startTimedExercise(ex);
+  const dur = getExDuration(ex);
+  if (ex.isTimer && dur) {
+    btn.textContent = '▶ INIZIA TIMER' + (ex.sets ? ' — SET '+(COMP.setIdx+1)+'/'+ex.sets : '');
+    btn.onclick = () => startTimedExercise(ex, dur);
   } else {
     btn.textContent = ex.sets ? '✓  HO FINITO IL SET '+(COMP.setIdx+1) : '✓  FATTO';
     btn.onclick = companionAction;
@@ -680,18 +797,39 @@ function speakExercise(ex) {
   speak(msg);
 }
 
-function startTimedExercise(ex) {
+function startTimedExercise(ex, dur) {
   const btn = document.getElementById('comp-main-btn');
-  btn.textContent = '⏸ IN CORSO…'; btn.onclick = null;
-  let rem = ex.duration;
+  const setLabel = ex.sets ? ' (set '+(COMP.setIdx+1)+'/'+ex.sets+')' : '';
+  btn.textContent = '⏸' + setLabel; btn.onclick = null;
+  let rem = dur ?? getExDuration(ex);
   document.getElementById('comp-reps-display').textContent = formatTime(rem);
-  if (COMP.ttsEnabled) speak('Via!');
+  if (COMP.ttsEnabled) speak('Via' + (ex.sets ? ', set '+(COMP.setIdx+1) : '') + '!');
   COMP.restTimer = setInterval(() => {
-    rem--; document.getElementById('comp-reps-display').textContent = formatTime(rem);
+    rem--;
+    document.getElementById('comp-reps-display').textContent = formatTime(rem);
+    // Countdown callout in the last 5 seconds
+    if (rem > 0 && rem <= 5 && COMP.ttsEnabled) speak(String(rem));
     if (rem <= 0) {
       clearInterval(COMP.restTimer); COMP.restTimer = null;
-      if (COMP.ttsEnabled) speak('Completato! Ottimo.');
-      COMP.exIdx++; COMP.setIdx = 0; setTimeout(showCompExercise, 700);
+      if (COMP.ttsEnabled) speak('Ottimo!');
+      // If this exercise has sets, treat like companionAction
+      if (ex.sets) {
+        COMP.setIdx++;
+        if (COMP.setIdx < ex.sets) {
+          // More sets remaining → rest then next set
+          showCompRest(ex.rest || 45, false);
+        } else {
+          // All sets done → move to next exercise
+          COMP.setIdx = 0; COMP.exIdx++;
+          if (COMP.exIdx < COMP.exercises.length) {
+            if (ex.rest) showCompRest(ex.rest, true);
+            else showCompExercise();
+          } else showCompDone();
+        }
+      } else {
+        // Single-duration (warmup/cooldown) — just move on
+        COMP.exIdx++; COMP.setIdx = 0; setTimeout(showCompExercise, 500);
+      }
     }
   }, 1000);
 }
@@ -753,13 +891,46 @@ function showCompDone() {
   if (COMP.ttsEnabled) speak('Allenamento completato! Ottimo lavoro! Non dimenticare il defaticamento.');
 }
 
-function rateDifficulty(val) {
-  const d = today();
-  STATE.logs[d] = { type:'strength', sessionId:COMP.session?.name??'', completed:true,
-                    difficulty:val, date:d, timestamp:new Date().toISOString() };
-  saveState(); showToast('🎉 Sessione salvata! '+diffLabel(val));
-  setTimeout(() => { closeCompanion(); renderDashboard(); }, 1200);
+// Track selected difficulty before saving
+let _selectedDifficulty = null;
+
+function selectDifficulty(val) {
+  _selectedDifficulty = val;
+  // Highlight the selected button
+  document.querySelectorAll('.diff-btn').forEach(b => {
+    b.classList.toggle('selected', b.dataset.val === val);
+  });
+  // Reveal notes textarea + save button
+  document.getElementById('comp-notes-section').classList.remove('hidden');
+  // Smooth scroll to show notes field on mobile
+  setTimeout(() => {
+    document.getElementById('comp-notes-section').scrollIntoView({ behavior:'smooth', block:'nearest' });
+  }, 100);
 }
+
+function saveWorkoutAndClose() {
+  if (!_selectedDifficulty) { showToast('Seleziona prima una difficoltà 👆'); return; }
+  const notes = (document.getElementById('comp-workout-notes').value || '').trim();
+  const dateStr = WORKOUT_DATE ?? today();
+  STATE.logs[dateStr] = {
+    type:       'strength',
+    sessionId:  COMP.session?.name ?? '',
+    completed:  true,
+    difficulty: _selectedDifficulty,
+    notes:      notes,
+    date:       dateStr,
+    timestamp:  new Date().toISOString(),
+  };
+  saveState();
+  showToast('🎉 Sessione salvata! ' + diffLabel(_selectedDifficulty));
+  _selectedDifficulty = null;
+  document.getElementById('comp-workout-notes').value = '';
+  document.getElementById('comp-notes-section').classList.add('hidden');
+  setTimeout(() => { closeCompanion(); renderDashboard(); }, 900);
+}
+
+// Legacy alias (keeps backward compat if anything calls rateDifficulty directly)
+function rateDifficulty(val) { selectDifficulty(val); }
 
 function speak(text) {
   if (!window.speechSynthesis) return;
