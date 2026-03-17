@@ -816,6 +816,12 @@ h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.04em; }
   flex: 1; min-width: 80px; line-height: 1.4;
 }
 .diff-btn:hover { border-color: var(--accent); color: var(--accent); }
+.diff-btn.selected {
+  border-color: var(--accent);
+  background: rgba(184,255,69,0.15);
+  color: var(--accent);
+  transform: scale(1.04);
+}
 
 /* ══════════════════════════════════════
    TOAST
